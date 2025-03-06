@@ -1,110 +1,74 @@
 from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
 import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import os
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///reservas.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
 
-# Modelo de Reservas
-class Reserva(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    docente = db.Column(db.String(100), nullable=False)
-    sala = db.Column(db.String(20), nullable=False)
-    horario = db.Column(db.String(20), nullable=False)
-    carro = db.Column(db.Integer, nullable=False)
+# -------------- CONFIGURACION DEL SERVIDOR SMTP (Correo y App Password) --------------
+# Asegúrate de cambiar los siguientes valores con tu propia información.
+SMTP_SERVER = "smtp.gmail.com"  # Si usas Gmail, esto es correcto
+SMTP_PORT = 587  # Puerto para TLS
 
-# Crear la base de datos
-with app.app_context():
-    db.create_all()
+# AQUI DEBES COLOCAR TU CORREO ELECTRONICO (ejemplo: "tu_correo@gmail.com")
+SENDER_EMAIL = "fernando.faundez.e@gmail.com"  # Cambia por tu correo de Gmail
 
-# Endpoint para evitar error 404 Page not found
-@app.route('/')
-def index():
-    return "Bienvenido a la API de Reservas de Porvenir School - Todo parece funcionar correctamente."
+# AQUI DEBES COLOCAR TU CONTRASEÑA (O UN APP PASSWORD SI USAS GMAIL CON 2FA)
+SENDER_PASSWORD = "U6K7mQNPwFTcdHg1977"  # Cambia por tu contraseña o App Password
 
-# Endpoint para consultar horarios disponibles
-@app.route('/disponibles', methods=['GET'])
-def obtener_horarios_disponibles():
-    horarios = [f"{h}:00" for h in range(8, 19)]
-    reservas = Reserva.query.with_entities(Reserva.horario).all()
-    reservados = {r[0] for r in reservas}
-    disponibles = [h for h in horarios if h not in reservados]
-    return jsonify(disponibles)
+# -------------- FUNCION PARA ENVIAR CORREO ----------------
+def send_email(recipient_email, subject, message_body):
+    try:
+        # Crear el mensaje
+        message = MIMEMultipart()
+        message["From"] = SENDER_EMAIL
+        message["To"] = recipient_email
+        message["Subject"] = subject
 
-# Endpoint para reservar un carro
-from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from flask_cors import CORS
+        # Agregar el cuerpo del mensaje
+        message.attach(MIMEText(message_body, "plain"))
 
-app = Flask(__name__)
-CORS(app)
+        # Conectar al servidor SMTP
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()  # Encriptar la conexión
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)  # Iniciar sesión con tus credenciales
+            server.sendmail(SENDER_EMAIL, recipient_email, message.as_string())  # Enviar el correo
 
-# Configuración de la base de datos SQLite
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///reservas.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
+        print("Correo enviado exitosamente.")
+    except Exception as e:
+        print(f"Error al enviar el correo: {e}")
 
-# Modelo de la base de datos
-class Reserva(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    docente = db.Column(db.String(100), nullable=False)
-    sala = db.Column(db.String(20), nullable=False)
-    horario = db.Column(db.String(20), nullable=False)
-    carro = db.Column(db.Integer, nullable=False)  # 1 = Básica, 2 = Media
-
-# Crear la base de datos si no existe
-with app.app_context():
-    db.create_all()
-
+# -------------- RUTA DE RESERVA ----------------
 @app.route('/reservar', methods=['POST'])
 def reservar():
-    data = request.get_json()
+    data = request.json  # Suponiendo que los datos vienen en formato JSON
 
-    docente = data.get('docente')
-    sala = data.get('sala')
+    # Extraer la información de la solicitud (estos datos provienen del formulario de Google)
+    nombre = data.get('nombre')
+    correo = data.get('correo')
     horario = data.get('horario')
+    sala = data.get('sala')
     carro = data.get('carro')
 
-    # Validar si el horario ya está tomado para ese carro
-    reserva_existente = Reserva.query.filter_by(horario=horario, carro=carro).first()
-    
-    if reserva_existente:
-        return jsonify({"error": f"El carro {carro} ya está reservado en algun horario solicitado. Debe corregir su solicitud."}), 400
+    # -------------- COMPROBAR DISPONIBILIDAD ----------------
+    # Aquí agregas la lógica para validar si el horario está disponible o no
+    horario_disponible = True  # Esto debe reemplazarse con la lógica de validación de tu base de datos
 
-    # Si el horario está disponible, se guarda la reserva
-    nueva_reserva = Reserva(docente=docente, sala=sala, horario=horario, carro=carro)
-    db.session.add(nueva_reserva)
-    db.session.commit()
+    if not horario_disponible:
+        # Si el horario no está disponible, enviamos un correo con el aviso
+        subject = "Confirmación de Reserva"
+        message = f"Estimado/a {nombre},\n\nEl horario {horario} no está disponible de momento. Le ruego que lo/s modifique.\n\nAtte, Bot Reserva Carro Tecnológico."
+        send_email(correo, subject, message)  # Enviar correo al usuario
+        return jsonify({"message": "El horario no está disponible, por favor modifique."}), 400
 
-    return jsonify({"mensaje": "Reserva confirmada", "docente": docente, "sala": sala, "horario": horario, "carro": carro}), 201
+    # Si el horario está disponible, proceder con la reserva (guardar en base de datos, etc.)
+    subject = "Confirmación de Reserva Exitosa"
+    message = f"Estimado/a {nombre},\n\nSu reserva ha sido confirmada para el horario {horario}, en la sala {sala}, con el carro {carro}.\n\nAtte, Bot Reserva Carro Tecnológico."
+    send_email(correo, subject, message)  # Enviar correo al usuario confirmando la reserva
 
+    return jsonify({"message": "Reserva realizada exitosamente."}), 201
+
+# -------------- INICIAR LA APLICACION FLASK ----------------
 if __name__ == '__main__':
     app.run(debug=True)
-
-
-# Función para enviar correo de confirmación
-def enviar_correo(data):
-    remitente = "fernando.faundez@porvenirschool.cl"
-    destinatario = "fernando.faundez.e@gmail.com"
-    asunto = "Nueva Reserva de Carro Tecnológico"
-    cuerpo = f"""\
-    Asunto: {asunto}
-    
-    Buen dia Ma'am, necesito reservar el carro tecnológico número {data['carro']}, 
-    en la sala {data['sala']}, de {data['horario']}, para {data['docente']}.
-    Atte Bot de Reserva de carros Porvenir School
-    """
-    try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(remitente, "12345678abc#")
-        server.sendmail(remitente, destinatario, cuerpo.encode('utf-8'))
-        server.quit()
-    except Exception as e:
-        print("Error al enviar correo:", e)
-
-if __name__ == '__main__':
-    app.run(debug=True)
-
